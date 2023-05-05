@@ -1,43 +1,127 @@
-import cv2, time
+import cv2
+import RPi.GPIO as GPIO
+import time
 
-# capturing video from webcam
+# Define the GPIO pins for the servos
+servo1_pin = 11
+servo2_pin = 12
+
+# Set up the GPIO pins for the servos
+GPIO.setmode(GPIO.BOARD)
+GPIO.setup(servo1_pin, GPIO.OUT)
+GPIO.setup(servo2_pin, GPIO.OUT)
+
+# Define the ranges of servo angles
+SERVO1_RANGE = (0, 180)
+SERVO2_RANGE = (0, 180)
+
+# Define the PWM frequency and duty cycle range
+PWM_FREQUENCY = 50
+PWM_DUTY_CYCLE_RANGE = (2.5, 12.5)
+
+# Define the function to initialize the PWM signals for the servos
+def init_pwm(pin, freq, duty_cycle_range):
+    pwm = GPIO.PWM(pin, freq)
+    pwm.start(0)
+    pwm.ChangeDutyCycle(duty_cycle_range[0])
+    time.sleep(0.5)
+    return pwm
+
+# Initialize the PWM signals for the servos
+servo1_pwm = init_pwm(servo1_pin, PWM_FREQUENCY, PWM_DUTY_CYCLE_RANGE)
+servo2_pwm = init_pwm(servo2_pin, PWM_FREQUENCY, PWM_DUTY_CYCLE_RANGE)
+
+# Define the function to map a value from one range to another
+def map_value(value, from_range, to_range):
+    return (value - from_range[0]) * (to_range[1] - to_range[0]) / (from_range[1] - from_range[0]) + to_range[0]
+
+# Define the function to gradually move a servo from its current position to a target position
+def move_servo_smoothly(pwm, current_pos, target_pos, step):
+    while current_pos != target_pos:
+        if current_pos < target_pos:
+            current_pos = min(current_pos + step, target_pos)
+        else:
+            current_pos = max(current_pos - step, target_pos)
+        pwm.ChangeDutyCycle(map_value(current_pos, SERVO1_RANGE, PWM_DUTY_CYCLE_RANGE))
+        time.sleep(0.05)
+    return current_pos
+
+# Define the function to stop the PWM signal for a given servo
+def stop_pwm(pwm):
+    pwm.ChangeDutyCycle(0)
+    time.sleep(0.5)
+    pwm.stop()
+
+# Define the function to move a servo to a specific angle
+def set_servo_position(pwm, pos, delay=0.5):
+    pwm.ChangeDutyCycle(map_value(pos, SERVO1_RANGE, PWM_DUTY_CYCLE_RANGE))
+    time.sleep(delay)
+
+# Capturing video from webcam
 capture = cv2.VideoCapture(0)
-# set window size and name
+
+# Set window size and name
 cv2.namedWindow("Detecting Motion...", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("Detecting Motion...", 1200, 900)
 
-
 while capture.isOpened():
-    # to read frame by frame
-    _, img_1 = capture.read()
-    _, img_2 = capture.read()
+    ret, frame = capture.read()
+        # Convert the frame to grayscale and apply a Gaussian blur to reduce noise
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
-    # find difference between two frames
-    diff = cv2.absdiff(img_1, img_2)
+    # Store the previous frame
+    if 'prev_frame' not in globals():
+        prev_frame = gray
 
-    # to convert the frame to grayscale
-    diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    # Compute the absolute difference between the current and previous frames
+    frame_diff = cv2.absdiff(prev_frame, gray)
 
-    # apply some blur to smoothen the frame
-    diff_blur = cv2.GaussianBlur(diff_gray, (5, 5), 0)
+    # Apply a threshold to the frame difference
+    thresh = cv2.threshold(frame_diff, 30, 255, cv2.THRESH_BINARY)[1]
 
-    # to get the binary image
-    _, thresh_bin = cv2.threshold(diff_blur, 20, 255, cv2.THRESH_BINARY)
+    # Dilate the thresholded image to fill in holes
+    thresh = cv2.dilate(thresh, None, iterations=2)
 
-    # to find contours
-    contours, hierarchy = cv2.findContours(thresh_bin, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Find contours in the thresholded image
+    contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # to draw the bounding box when the motion is detected
+    # Loop over the contours
     for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        if cv2.contourArea(contour) > 3500:
-            cv2.rectangle(img_1, (x, y), (x+w, y+h), (205, 55, 0), 2)
-            cv2.putText(img_1, "Status: {}".format('Movement'), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 1)
-    # display the output
-    cv2.imshow("Detecting Motion...", img_1)
-    if cv2.waitKey(100) == 13:
-        exit()
+        # Compute the bounding box for the contour
+        (x, y, w, h) = cv2.boundingRect(contour)
 
-# release the capture and destroy all windows
-capture.release()
-cv2.destroyAllWindows()
+        # Draw a rectangle around the contour
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        # Move the servos based on the position of the object in the frame
+        # Center of the object in the frame
+        center_x = x + w // 2
+        center_y = y + h // 2
+
+        # Convert the center coordinates to servo angles
+        servo1_angle = int(map_value(center_x, (0, frame.shape[1]), SERVO1_RANGE))
+        servo2_angle = int(map_value(center_y, (0, frame.shape[0]), SERVO2_RANGE))
+
+        # Move the servos smoothly to the target positions
+        move_servo_smoothly(servo1_pwm, servo1_pwm.current_pos, servo1_angle, 1)
+        move_servo_smoothly(servo2_pwm, servo2_pwm.current_pos, servo2_angle, 1)
+
+        # Show the frame in a window
+        cv2.imshow("Detecting Motion...", frame)
+
+        # Update the previous frame
+        prev_frame = gray
+
+        # Wait for a key press and check if the 'q' key was pressed
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            break
+
+        capture.release()
+        cv2.destroyAllWindows()
+
+        stop_pwm(servo1_pwm)
+        stop_pwm(servo2_pwm)
+
+        GPIO.cleanup()
