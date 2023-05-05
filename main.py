@@ -1,111 +1,86 @@
 import cv2
+import numpy as np
 import RPi.GPIO as GPIO
 import time
-"""
-# Define the GPIO pins for the servos
-servo1_pin = 27
-servo2_pin = 17
 
 # Set up the GPIO pins for the servos
-GPIO.setmode(GPIO.BOARD)
-GPIO.setup(servo1_pin, GPIO.OUT)
-GPIO.setup(servo2_pin, GPIO.OUT)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(17, GPIO.OUT)
+GPIO.setup(27, GPIO.OUT)
 
-# Define the ranges of servo angles
-SERVO1_RANGE = (0, 180)
-SERVO2_RANGE = (0, 180)
+servo_x = GPIO.PWM(17, 50)  # X servo on pin 17 (50Hz PWM)
+servo_y = GPIO.PWM(27, 50)  # Y servo on pin 27 (50Hz PWM)
 
-# Define the PWM frequency and duty cycle range
-PWM_FREQUENCY = 50
-PWM_DUTY_CYCLE_RANGE = (2.5, 12.5)
+servo_x.start(7.5)  # Initial position
+servo_y.start(7.5)  # Initial position
 
-# Define the function to initialize the PWM signals for the servos
-def init_pwm(pin, freq, duty_cycle_range):
-    pwm = GPIO.PWM(pin, freq)
-    pwm.start(0)
-    pwm.ChangeDutyCycle(duty_cycle_range[0])
-    time.sleep(0.5)
-    return pwm
+# Function to convert servo angle to duty cycle
+def angle_to_duty_cycle(angle):
+    return (angle / 180.0) * 10 + 2.5
 
-# Initialize the PWM signals for the servos
-servo1_pwm = init_pwm(servo1_pin, PWM_FREQUENCY, PWM_DUTY_CYCLE_RANGE)
-servo2_pwm = init_pwm(servo2_pin, PWM_FREQUENCY, PWM_DUTY_CYCLE_RANGE)
-
-# Define the function to map a value from one range to another
-def map_value(value, from_range, to_range):
-    return (value - from_range[0]) * (to_range[1] - to_range[0]) / (from_range[1] - from_range[0]) + to_range[0]
-
-# Define the function to gradually move a servo from its current position to a target position
-def move_servo_smoothly(pwm, current_pos, target_pos, step):
-    while current_pos != target_pos:
-        if current_pos < target_pos:
-            current_pos = min(current_pos + step, target_pos)
-        else:
-            current_pos = max(current_pos - step, target_pos)
-        pwm.ChangeDutyCycle(map_value(current_pos, SERVO1_RANGE, PWM_DUTY_CYCLE_RANGE))
-        time.sleep(0.05)
-    return current_pos
-
-# Define the function to stop the PWM signal for a given servo
-def stop_pwm(pwm):
-    pwm.ChangeDutyCycle(0)
-    time.sleep(0.5)
-    pwm.stop()
-
-# Define the function to move a servo to a specific angle
-def set_servo_position(pwm, pos, delay=0.5):
-    pwm.ChangeDutyCycle(map_value(pos, SERVO1_RANGE, PWM_DUTY_CYCLE_RANGE))
-    time.sleep(delay)
-
-# Capturing video from webcam
-capture = cv2.VideoCapture(0)
-
-# Set window size and name
-cv2.namedWindow("Detecting Motion...", cv2.WINDOW_NORMAL)
-cv2.resizeWindow("Detecting Motion...", 1200, 900)
-
-while capture.isOpened():
-    ret, frame = capture.read()
-        # Convert the frame to grayscale and apply a Gaussian blur to reduce noise
+# Function to detect box using OpenCV
+def detect_box(frame):
+    # Convert the frame to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
-    # Store the previous frame
-    if 'prev_frame' not in globals():
-        prev_frame = gray
+    # Apply a Gaussian blur to reduce noise
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-    # Compute the absolute difference between the current and previous frames
-    frame_diff = cv2.absdiff(prev_frame, gray)
+    # Detect edges using Canny edge detection
+    edges = cv2.Canny(blurred, 50, 150)
 
-    # Apply a threshold to the frame difference
-    thresh = cv2.threshold(frame_diff, 30, 255, cv2.THRESH_BINARY)[1]
+    # Find contours from the detected edges
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Dilate the thresholded image to fill in holes
-    thresh = cv2.dilate(thresh, None, iterations=2)
+    # Find the contour with the largest area (assuming this is the box)
+    if contours:
+        max_area = 0
+        max_contour = None
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > max_area:
+                max_area = area
+                max_contour = contour
 
-    # Find contours in the thresholded image
-    contours, _ = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return max_contour
 
-    # Loop over the contours
-    for contour in contours:
-        # Compute the bounding box for the contour
-        (x, y, w, h) = cv2.boundingRect(contour)
+    return None
 
-        # Draw a rectangle around the contour
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+# Capture video from the camera
+cap = cv2.VideoCapture(0)
 
-        # Move the servos based on the position of the object in the frame
-        # Center of the object in the frame
-        center_x = x + w // 2
-        center_y = y + h // 2
+try:
+    while True:
+        # Read a frame from the video feed
+        ret, frame = cap.read()
 
-        # Convert the center coordinates to servo angles
-        servo1_angle = int(map_value(center_x, (0, frame.shape[1]), SERVO1_RANGE))
-        servo2_angle = int(map_value(center_y, (0, frame.shape[0]), SERVO2_RANGE))
+        if not ret:
+            break
 
-        # Move the servos smoothly to the target positions
-        move_servo_smoothly(servo1_pwm, servo1_pwm.current_pos, servo1_angle, 1)
-        move_servo_smoothly(servo2_pwm, servo2_pwm.current_pos, servo2_angle, 1)
+        # Detect the box
+        box_contour = detect_box(frame)
+
+        if box_contour is not None:
+            # Calculate the center of the box
+            M = cv2.moments(box_contour)
+            cX = int(M["m10"] / M["m00"])
+            cY = int(M["m01"] / M["m00"])
+
+            # Draw the detected box and its center
+            cv2.drawContours(frame, [box_contour], -1, (0, 255, 0), 2)
+            cv2.circle(frame, (cX, cY), 5, (255, 0, 0), -1)
+
+            # Calculate servo angles to aim away from the box
+            x_ratio = cX / frame.shape[1]
+            y_ratio = cY / frame.shape[0]
+
+            x_angle = 180 - 180 * x_ratio
+            y_angle = 180 * y_ratio
+
+            # Update servo positions
+            servo_x.ChangeDutyCycle(angle_to_duty_cycle(x_angle))
+            servo_y.ChangeDutyCycle(angle_to_duty_cycle(y_angle))
+
 
         # Show the frame in a window
         cv2.imshow("Detecting Motion...", frame)
@@ -125,51 +100,13 @@ while capture.isOpened():
         stop_pwm(servo2_pwm)
 
         GPIO.cleanup()
-        
-  """
-        
-
-import time
-
-# Define pins for servos
-x_pin = 17
-y_pin = 27
-
-# Set up GPIO mode and pins
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(x_pin, GPIO.OUT)
-GPIO.setup(y_pin, GPIO.OUT)
-
-# Set up PWM frequency and initial duty cycle
-frequency = 50
-duty_cycle_x = 7.5
-duty_cycle_y = 7.5
-
-# Create PWM instances for servos
-x_servo = GPIO.PWM(x_pin, frequency)
-y_servo = GPIO.PWM(y_pin, frequency)
-
-# Start PWM
-x_servo.start(duty_cycle_x)
-y_servo.start(duty_cycle_y)
-
-# Move servos to different positions
-while True:
-    # Move x_servo to the left
-    x_servo.ChangeDutyCycle(10)
-    time.sleep(1)
-
-    # Move y_servo up
-    y_servo.ChangeDutyCycle(10)
-    time.sleep(1)
-
-    # Move x_servo to the center
-    x_servo.ChangeDutyCycle(7.5)
-    time.sleep(1)
-
-    # Move y_servo down
-    y_servo.ChangeDutyCycle(5)
-    time.sleep(1)
-
-# Clean up GPIO pins
-GPIO.cleanup()
+               
+except KeyboardInterrupt:
+    pass
+finally:
+    # Clean up
+    cap.release()
+    cv2.destroyAllWindows()
+    servo_x.stop()
+    servo_y.stop()
+    GPIO.cleanup()
