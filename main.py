@@ -1,10 +1,10 @@
 import cv2
 import RPi.GPIO as GPIO
 import time
-
+"""
 # Define the GPIO pins for the servos
-servo1_pin = 11
-servo2_pin = 12
+servo1_pin = 27
+servo2_pin = 17
 
 # Set up the GPIO pins for the servos
 GPIO.setmode(GPIO.BOARD)
@@ -125,3 +125,51 @@ while capture.isOpened():
         stop_pwm(servo2_pwm)
 
         GPIO.cleanup()
+        
+  """
+        
+
+import time
+
+# Define pins for servos
+x_pin = 17
+y_pin = 27
+
+# Set up GPIO mode and pins
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(x_pin, GPIO.OUT)
+GPIO.setup(y_pin, GPIO.OUT)
+
+# Set up PWM frequency and initial duty cycle
+frequency = 50
+duty_cycle_x = 7.5
+duty_cycle_y = 7.5
+
+# Create PWM instances for servos
+x_servo = GPIO.PWM(x_pin, frequency)
+y_servo = GPIO.PWM(y_pin, frequency)
+
+# Start PWM
+x_servo.start(duty_cycle_x)
+y_servo.start(duty_cycle_y)
+
+# Move servos to different positions
+while True:
+    # Move x_servo to the left
+    x_servo.ChangeDutyCycle(10)
+    time.sleep(1)
+
+    # Move y_servo up
+    y_servo.ChangeDutyCycle(10)
+    time.sleep(1)
+
+    # Move x_servo to the center
+    x_servo.ChangeDutyCycle(7.5)
+    time.sleep(1)
+
+    # Move y_servo down
+    y_servo.ChangeDutyCycle(5)
+    time.sleep(1)
+
+# Clean up GPIO pins
+GPIO.cleanup()
